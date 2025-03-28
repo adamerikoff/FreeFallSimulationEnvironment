@@ -19,60 +19,12 @@ pub enum DroneAction {
     Forward,
     Backward,
     Release,
-}
-
-// Camera state management
-pub struct CameraState {
-    angle: f32,
-    distance: f32,
-    height: f32,
-    target: Vec3,
-}
-
-impl Default for CameraState {
-    fn default() -> Self {
-        Self {
-            angle: 0.0,
-            distance: 100.0,
-            height: 150.0,
-            target: Vec3::new(0.0, 0.0, 0.0),
-        }
-    }
-}
-
-impl CameraState {
-    fn get_camera(&self) -> Camera3D {
-        let position = Vec3::new(
-            self.target.x + self.distance * self.angle.sin(),
-            self.height,
-            self.target.z + self.distance * self.angle.cos(),
-        );
-        
-        Camera3D {
-            position,
-            target: self.target,
-            up: Vec3::Y,
-            ..Default::default()
-        }
-    }
-    
-    fn update(&mut self, target: Vec3) {
-        self.target = target;
-    }
-    
-
-    pub fn set_angle(&mut self, angle: f32) {
-        self.angle = angle;
-    }
-
-    pub fn set_distance(&mut self, distance: f32) {
-        self.distance = distance;
-    }
+    None
 }
 
 struct Drone {
     position: Vec3,
-    size: f32,
+    size: Vec3,
     color: Color,
 }
 
@@ -82,6 +34,7 @@ struct Grenade {
     radius: f32,
     color: Color,
     is_released: bool,
+    weight: f32
 }
 
 struct Target {
@@ -94,7 +47,7 @@ pub struct Environment {
     drone: Drone,
     grenade: Grenade,
     target: Target,
-    pub camera: CameraState,
+    camera: Camera3D,
     wind_vector: Vec3,
     episode_complete: bool,
     total_time_elapsed: f32,
@@ -106,22 +59,28 @@ impl Environment {
         Self {
             drone: Drone {
                 position: Vec3::ZERO,
-                size: 3.0,
+                size: Vec3 { x: 10.0, y: 1.0, z: 10.0 },
                 color: BLUE,
             },
             grenade: Grenade {
                 position: Vec3::ZERO,
                 velocity: Vec3::ZERO,
-                radius: 2.0,
+                radius: 0.07,
+                weight: 0.4,
                 color: RED,
                 is_released: false,
             },
             target: Target {
                 position: Vec3::ZERO,
-                radius: 10.0,
-                color: PINK,
+                radius: 5.0,
+                color: GREEN,
             },
-            camera: CameraState::default(),
+            camera: Camera3D { 
+                position: Vec3::ZERO, 
+                target: Vec3::ZERO, 
+                up: Vec3::Y, 
+                ..Camera3D::default()
+            },
             wind_vector: Vec3::ZERO,
             episode_complete: false,
             total_time_elapsed: 0.0,
@@ -147,6 +106,16 @@ impl Environment {
         self.target.position = Vec3::new(target_position_x, 0.0, target_position_z);
         
         self.wind_vector = self.generate_wind_vector();
+
+        let scene_center = (self.drone.position + self.target.position) * 0.5;
+        let camera_distance = (self.drone.position - self.target.position).length().max(350.0);
+        
+        self.camera.position = Vec3::new(
+            scene_center.x,
+            scene_center.y + 50.0,
+            scene_center.z + camera_distance,
+        );
+        self.camera.target = scene_center;
 
         self.total_time_elapsed = 0.0;
         self.free_fall_time_elapsed = 0.0;
@@ -182,16 +151,14 @@ impl Environment {
                 if !self.grenade.is_released {
                     self.grenade.is_released = true;
                 }
-            }
+            },
+            DroneAction::None => (),
         }
     }
 
     fn update(&mut self) {
         // Increment total time
         self.total_time_elapsed += get_frame_time();
-        
-        // Update camera to follow drone
-        self.camera.update(self.drone.position);
 
         // If grenade is released, update its physics
         if self.grenade.is_released && !self.episode_complete {
@@ -200,31 +167,36 @@ impl Environment {
             // Constants for physics simulation
             const GRAVITY: f32 = 9.8;
             const DRAG_COEFFICIENT: f32 = 0.47; // For a sphere
-            const AIR_DENSITY: f32 = 1.2; // kg/m^3
+            const AIR_DENSITY: f32 = 1.293; // kg/m^3
+            const MASS: f32 = 1.0; // Assume mass of 1kg for simplicity
 
-            // Calculate forces
-            let gravity_force = Vec3::new(0.0, -GRAVITY, 0.0);
+            // Calculate gravitational force (downward)
+            let gravity_force = Vec3::new(0.0, -GRAVITY * MASS, 0.0);
+
+            // Calculate relative velocity (object velocity - wind velocity)
+            let relative_velocity = self.grenade.velocity - self.wind_vector;
+            let speed = relative_velocity.length();
 
             // Calculate drag force (Fd = 0.5 * ρ * v² * Cd * A)
-            let velocity_magnitude = self.grenade.velocity.length();
             let cross_sectional_area = std::f32::consts::PI * self.grenade.radius.powi(2);
-            let drag_magnitude = 0.5 * AIR_DENSITY * velocity_magnitude.powi(2) * DRAG_COEFFICIENT * cross_sectional_area;
-            let drag_direction = if velocity_magnitude > 0.0 {
-                -self.grenade.velocity / velocity_magnitude
+            let drag_magnitude = if speed > 0.0 {
+                0.5 * AIR_DENSITY * speed.powi(2) * DRAG_COEFFICIENT * cross_sectional_area
+            } else {
+                0.0
+            };
+
+            let drag_force = if speed > 0.0 {
+                -relative_velocity.normalize() * drag_magnitude
             } else {
                 Vec3::ZERO
             };
-            let drag_force = drag_direction * drag_magnitude;
-            
-            // Calculate wind force (simplified)
-            let wind_force = self.wind_vector * 0.1;
 
-            // Total acceleration (F = ma, a = F/m)
-            let mass = 1.0; // Assume mass of 1kg for simplicity
-            let total_acceleration = (gravity_force + drag_force + wind_force) / mass;
+            // Total acceleration (F = ma)
+            let total_force = gravity_force + drag_force;
+            let acceleration = total_force / MASS;
             
             // Update velocity and position using Euler integration
-            self.grenade.velocity += total_acceleration * get_frame_time();
+            self.grenade.velocity += acceleration * get_frame_time();
             self.grenade.position += self.grenade.velocity * get_frame_time();
             
             // Check if grenade has hit the ground
@@ -250,11 +222,27 @@ impl Environment {
     }
 
     fn calculate_drone_target_angle(&self) -> f32 {
-        let drone_magnitude = self.drone.position.length();
-        let target_magnitude = self.target.position.length();
-        let cos_angle = Vec3::dot(self.drone.position, self.target.position) / (drone_magnitude * target_magnitude);
-        let angle = cos_angle.acos();
-        angle
+        // Vector from drone to target (in world space)
+        let drone_to_target = self.target.position - self.drone.position;
+
+        // Assume drone's forward direction is along its local z-axis
+        // (If your drone has rotation, use its actual forward vector)
+        let drone_forward = Vec3::new(0.0, 0.0, 1.0); // Default forward (adjust if needed)
+
+        // Project drone_to_target onto the horizontal plane (XZ plane)
+        let horizontal_target = Vec3::new(drone_to_target.x, 0.0, drone_to_target.z);
+        
+        // Calculate the angle between drone's forward and the target direction
+        let cos_angle = Vec3::dot(drone_forward, horizontal_target.normalize());
+        let angle = cos_angle.acos(); // Angle in radians
+
+        // Determine if the target is to the left or right
+        let cross = Vec3::cross(drone_forward, horizontal_target);
+        if cross.y < 0.0 {
+            -angle // Target is to the left
+        } else {
+            angle // Target is to the right
+        }
     }
 
     fn generate_wind_vector(&self) -> Vec3 {
@@ -272,7 +260,7 @@ impl Environment {
     }
 
     fn calculate_reward(&self) -> f32 {
-        let mut reward = -0.5;
+        let mut reward = -0.1;
 
         if self.episode_complete {
             // Calculate difference in each dimension
@@ -289,9 +277,9 @@ impl Environment {
 
             // Reduce reward based on distance to target
             if distance <= self.target.radius {
-                reward = reward + ground_reward - (20.0 * distance) + (0.2 * self.drone.position.y);
+                reward = reward + ground_reward - (20.0 * distance);
             } else {
-                reward = reward - ground_reward - distance - self.drone.position.y;
+                reward = reward - ground_reward - distance;
             }
         }
         reward
@@ -299,16 +287,16 @@ impl Environment {
 
     pub fn render(&self) {
         clear_background(LIGHTGRAY);
-        set_camera(&self.camera.get_camera());
+        set_camera(&self.camera);
         
         // Draw ground grid
         draw_grid(450, 10.0, BLACK, GRAY);
         
         // Draw drone
-        draw_cube(self.drone.position, Vec3 { x: 5.0, y: 1.0, z: 10.0 }, None, self.drone.color);
+        draw_cube(self.drone.position, self.drone.size, None, self.drone.color);
         
         // Draw grenade
-        draw_sphere(self.grenade.position, self.grenade.radius, None, self.grenade.color);
+        draw_sphere(self.grenade.position, 3.0, None, self.grenade.color);
         
         // Draw target
         draw_sphere(self.target.position, self.target.radius, None, self.target.color);
@@ -319,26 +307,74 @@ impl Environment {
     }
 
     fn render_ui(&self) {
-        // Render UI information
-        let info_text = format!(
-            "Drone Position: ({:.1}, {:.1}, {:.1})\n\
-            Target Position: ({:.1}, {:.1}, {:.1})\n\
-            Grenade Position: ({:.1}, {:.1}, {:.1})\n\
-            Wind Vector: ({:.1}, {:.1}, {:.1})\n\
-            Angle: ({:.1})\n\
-            Ball Status: {}\n\
-            FreeFall Time: {:.2}s\n\
-            Total Episode Time: {:.2}s",
-            self.drone.position.x, self.drone.position.y, self.drone.position.z,
-            self.target.position.x, self.target.position.y, self.target.position.z,
-            self.grenade.position.x, self.grenade.position.y, self.grenade.position.z,
-            self.wind_vector.x, self.wind_vector.y, self.wind_vector.z,
-            self.calculate_drone_target_angle(),
-            if !self.grenade.is_released { "Attached" } else if self.episode_complete { "Landed" } else { "Falling" },
-            self.free_fall_time_elapsed,
-            self.total_time_elapsed
-        );
+        let font_size = 20.0;
+        let line_height = font_size * 1.2;
+        let mut y_pos = 20.0;
         
-        draw_text(&info_text, 20.0, 20.0, 20.0, BLACK);
+        // Draw each piece of information on separate lines
+        draw_text(
+            &format!("Drone Position: ({:.1}, {:.1}, {:.1})", 
+                self.drone.position.x, self.drone.position.y, self.drone.position.z),
+            20.0, y_pos, font_size, BLACK
+        );
+        y_pos += line_height;
+        
+        draw_text(
+            &format!("Target Position: ({:.1}, {:.1}, {:.1})", 
+                self.target.position.x, self.target.position.y, self.target.position.z),
+            20.0, y_pos, font_size, BLACK
+        );
+        y_pos += line_height;
+        
+        draw_text(
+            &format!("Grenade Position: ({:.1}, {:.1}, {:.1})", 
+                self.grenade.position.x, self.grenade.position.y, self.grenade.position.z),
+            20.0, y_pos, font_size, BLACK
+        );
+        y_pos += line_height;
+
+        draw_text(
+            &format!("Grenade Velocity: ({:.1}, {:.1}, {:.1})", 
+                self.grenade.velocity.x, self.grenade.velocity.y, self.grenade.velocity.z),
+            20.0, y_pos, font_size, BLACK
+        );
+        y_pos += line_height;
+        
+        draw_text(
+            &format!("Wind Vector: ({:.1}, {:.1}, {:.1})", 
+                self.wind_vector.x, self.wind_vector.y, self.wind_vector.z),
+            20.0, y_pos, font_size, BLACK
+        );
+        y_pos += line_height;
+        
+        draw_text(
+            &format!("Angle: {:.1}°", self.calculate_drone_target_angle()),
+            20.0, y_pos, font_size, BLACK
+        );
+        y_pos += line_height;
+        
+        let status = if !self.grenade.is_released {
+            "Attached"
+        } else if self.episode_complete {
+            "Landed"
+        } else {
+            "Falling"
+        };
+        draw_text(
+            &format!("Grenade Status: {}", status),
+            20.0, y_pos, font_size, BLACK
+        );
+        y_pos += line_height;
+        
+        draw_text(
+            &format!("FreeFall Time: {:.2}s", self.free_fall_time_elapsed),
+            20.0, y_pos, font_size, BLACK
+        );
+        y_pos += line_height;
+        
+        draw_text(
+            &format!("Total Episode Time: {:.2}s", self.total_time_elapsed),
+            20.0, y_pos, font_size, BLACK
+        );
     }
 }

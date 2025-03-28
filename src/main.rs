@@ -4,40 +4,23 @@ use ::rand::{prelude::*, random_range};
 mod environment;
 use environment::{Environment, DroneAction};
 
-#[macroquad::main("Drone Grenade Simulation")]
+fn window_conf() -> Conf {
+    Conf {
+        window_title: "Drone Grenade Simulation".to_owned(),
+        window_width: 1280,
+        window_height: 720,
+        high_dpi: true,  // For retina/HiDPI displays
+        ..Default::default()
+    }
+}
+
+#[macroquad::main(window_conf)]
 async fn main() {
     let mut env = Environment::new();
     env.reset();
 
-    let mut camera_angle = 0.0;
-    let mut camera_distance = 100.0;
-    let mut paused = false;
-
     loop {
-        // Handle input
-        if is_key_pressed(KeyCode::Space) {
-            env.reset();
-        }
-
-        if is_key_pressed(KeyCode::P) {
-            paused = !paused;
-        }
-
-        // Camera controls
-        if is_key_down(KeyCode::Q) {
-            camera_angle -= 0.05;
-        }
-        if is_key_down(KeyCode::E) {
-            camera_angle += 0.05;
-        }
-        if is_key_down(KeyCode::K) {
-            camera_distance -= 2.0;
-        }
-        if is_key_down(KeyCode::L) {
-            camera_distance += 2.0;
-        }
-
-        // Drone controls
+        // Process input (if any)
         let mut action = None;
         if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
             action = Some(DroneAction::Left);
@@ -51,17 +34,23 @@ async fn main() {
             action = Some(DroneAction::Release);
         }
 
-        // Step the environment if not paused
-        if !paused {
-            if let Some(act) = action {
-                let (obs, reward, done) = env.step(&act);
-                println!("Reward: {:.2}, Done: {}", reward, done);
-            }
+        // Always step the environment, passing None when no input
+        let (obs, reward, done) = if let Some(act) = action {
+            env.step(&act)
+        } else {
+            // Step with no action - physics still updates
+            env.step(&DroneAction::None)
+        };
+
+        if done {
+            println!("Observation: {:?}", obs);
+            println!("Reward: {}", reward);
         }
 
-        // Update camera parameters
-        env.camera.set_angle(camera_angle);
-        env.camera.set_distance(camera_distance);
+        // Reset if needed
+        if is_key_pressed(KeyCode::Space) || done {
+            env.reset();
+        }
 
         // Render
         env.render();
@@ -71,27 +60,15 @@ async fn main() {
             "CONTROLS:\n\
             WASD/Arrows: Move drone\n\
             R: Release grenade\n\
-            Space: Reset\n\
-            P: Pause\n\
-            Q/E: Rotate camera\n\
-            PageUp/PageDown: Zoom",
+            Space: Reset\n",
             20.0,
             screen_height() - 150.0,
             20.0,
             BLACK,
         );
 
-        // Draw pause indicator
-        if paused {
-            draw_text(
-                "PAUSED",
-                screen_width() / 2.0 - 50.0,
-                screen_height() / 2.0 - 50.0,
-                50.0,
-                RED,
-            );
-        }
-
+        draw_text(&format!("FPS: {}", get_fps()), 20.0, screen_height() - 180.0, 20.0, BLACK);
         next_frame().await;
     }
+
 }
