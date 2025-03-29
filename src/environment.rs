@@ -279,7 +279,18 @@ impl Environment {
         let main_width = (screen_width as f32 * 0.6) as i32;
         let side_width = screen_width - main_width;
         let side_height = screen_height / 2;
+
+        self.render_main(main_width, screen_height);
+        self.render_bot_side(main_width, side_height, side_width);
+        self.render_top_side(main_width, side_height, side_width);
+
+        // Switch to 2D for UI and borders
+        set_default_camera();
+        self.render_ui();
+        self.draw_viewport_borders(main_width, side_width, side_height);
+    }
     
+    fn render_main(&self, main_width: i32, screen_height: i32) {
         // 1. Main view (left 60% of screen)
         let main_camera = Camera3D {
             position: Vec3::new(
@@ -298,8 +309,10 @@ impl Environment {
         draw_cube(self.drone.position, self.drone.size, None, self.drone.color);
         draw_sphere(self.grenade.position, 3.0, None, self.grenade.color);
         draw_sphere(self.target.position, self.target.radius, None, self.target.color);
-    
-        // 2. Top-down view (top-right quadrant)
+    }
+
+    fn render_bot_side(&self, main_width: i32, side_height: i32, side_width: i32) {
+        // 2. Top-down view (bot-right quadrant)
         let top_camera = Camera3D {
             position: Vec3::new(
                 (self.drone.position.x + self.target.position.x) * 0.5,
@@ -320,8 +333,10 @@ impl Environment {
         draw_cube(self.drone.position, self.drone.size, None, self.drone.color);
         draw_sphere(self.grenade.position, 3.0, None, self.grenade.color);
         draw_sphere(self.target.position, self.target.radius, None, self.target.color);
-    
-        // 3. Side view (bottom-right quadrant)
+    }
+
+    fn render_top_side(&self, main_width: i32, side_height: i32, side_width: i32) {
+        // 3. Side view (top-right quadrant)
         let bot_camera = Camera3D {
             position: Vec3::new(
                 self.drone.position.x + 200.0,  // Offset to the side
@@ -338,13 +353,8 @@ impl Environment {
         draw_cube(self.drone.position, self.drone.size, None, self.drone.color);
         draw_sphere(self.grenade.position, 3.0, None, self.grenade.color);
         draw_sphere(self.target.position, self.target.radius, None, self.target.color);
-    
-        // Switch to 2D for UI and borders
-        set_default_camera();
-        self.render_ui();
-        self.draw_viewport_borders(main_width, side_width, side_height);
     }
-    
+
     fn draw_viewport_borders(&self, main_width: i32, side_width: i32, side_height: i32) {
         // Draw borders between viewports
         let screen_height = screen_height() as i32;
@@ -365,8 +375,8 @@ impl Environment {
         
         // Add labels for each viewport
         draw_text("Main View", 10.0, 20.0, 20.0, BLACK);
-        draw_text("Top View", (main_width + 10) as f32, 20.0, 20.0, BLACK);
-        draw_text("Drone View", (main_width + 10) as f32, (side_height + 20) as f32, 20.0, BLACK);
+        draw_text("Side View", (main_width + 10) as f32, 20.0, 20.0, BLACK);
+        draw_text("Top View", (main_width + 10) as f32, (side_height + 20) as f32, 20.0, BLACK);
     }
 
     fn render_ui(&self) {
