@@ -7,9 +7,6 @@ use environment::{Environment, DroneAction};
 fn window_conf() -> Conf {
     Conf {
         window_title: "Drone Grenade Simulation".to_owned(),
-        window_width: 1280,
-        window_height: 720,
-        high_dpi: true,  // For retina/HiDPI displays
         ..Default::default()
     }
 }

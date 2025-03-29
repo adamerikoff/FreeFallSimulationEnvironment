@@ -1,6 +1,8 @@
 use macroquad::prelude::*;
 use ::rand::{prelude::*, random_range};
 
+use crate::main;
+
 // RL-related types
 #[derive(Debug, Clone)]
 pub struct Observation {
@@ -47,7 +49,6 @@ pub struct Environment {
     drone: Drone,
     grenade: Grenade,
     target: Target,
-    camera: Camera3D,
     wind_vector: Vec3,
     episode_complete: bool,
     total_time_elapsed: f32,
@@ -75,12 +76,6 @@ impl Environment {
                 radius: 5.0,
                 color: GREEN,
             },
-            camera: Camera3D { 
-                position: Vec3::ZERO, 
-                target: Vec3::ZERO, 
-                up: Vec3::Y, 
-                ..Camera3D::default()
-            },
             wind_vector: Vec3::ZERO,
             episode_complete: false,
             total_time_elapsed: 0.0,
@@ -106,16 +101,6 @@ impl Environment {
         self.target.position = Vec3::new(target_position_x, 0.0, target_position_z);
         
         self.wind_vector = self.generate_wind_vector();
-
-        let scene_center = (self.drone.position + self.target.position) * 0.5;
-        let camera_distance = (self.drone.position - self.target.position).length().max(350.0);
-        
-        self.camera.position = Vec3::new(
-            scene_center.x,
-            scene_center.y + 50.0,
-            scene_center.z + camera_distance,
-        );
-        self.camera.target = scene_center;
 
         self.total_time_elapsed = 0.0;
         self.free_fall_time_elapsed = 0.0;
@@ -287,23 +272,101 @@ impl Environment {
 
     pub fn render(&self) {
         clear_background(LIGHTGRAY);
-        set_camera(&self.camera);
         
-        // Draw ground grid
-        draw_grid(450, 10.0, BLACK, GRAY);
-        
-        // Draw drone
+        // Calculate viewport dimensions
+        let screen_width = screen_width() as i32;
+        let screen_height = screen_height() as i32;
+        let main_width = (screen_width as f32 * 0.6) as i32;
+        let side_width = screen_width - main_width;
+        let side_height = screen_height / 2;
+    
+        // 1. Main view (left 60% of screen)
+        let main_camera = Camera3D {
+            position: Vec3::new(
+                (self.drone.position.x + self.target.position.x) * 0.5,
+                (self.drone.position.y + self.target.position.y) * 0.5 + 50.0,
+                (self.drone.position.z + self.target.position.z) * 0.5 + 
+                    (self.drone.position - self.target.position).length().max(350.0),
+            ),
+            target: (self.drone.position + self.target.position) * 0.5,
+            up: Vec3::Y,
+            viewport: Some((0, 0, main_width, screen_height)),
+            ..Camera3D::default()
+        };
+        set_camera(&main_camera);
+        draw_grid(200, 10.0, BLACK, DARKGRAY);
         draw_cube(self.drone.position, self.drone.size, None, self.drone.color);
-        
-        // Draw grenade
         draw_sphere(self.grenade.position, 3.0, None, self.grenade.color);
-        
-        // Draw target
         draw_sphere(self.target.position, self.target.radius, None, self.target.color);
-        
-        // Switch to 2D for UI
+    
+        // 2. Top-down view (top-right quadrant)
+        let top_camera = Camera3D {
+            position: Vec3::new(
+                (self.drone.position.x + self.target.position.x) * 0.5,
+                (self.drone.position.y + self.target.position.y) * 0.5 + 200.0,  // High above
+                (self.drone.position.z + self.target.position.z) * 0.5,
+            ),
+            target: Vec3::new(
+                (self.drone.position.x + self.target.position.x) * 0.5,
+                (self.drone.position.y + self.target.position.y) * 0.5,
+                (self.drone.position.z + self.target.position.z) * 0.5,
+            ),
+            up: Vec3::Z,  // Z-up for proper top-down view
+            viewport: Some((main_width, 0, side_width, side_height)),
+            ..Camera3D::default()
+        };
+        set_camera(&top_camera);
+        draw_grid(200, 10.0, BLACK, DARKGRAY);
+        draw_cube(self.drone.position, self.drone.size, None, self.drone.color);
+        draw_sphere(self.grenade.position, 3.0, None, self.grenade.color);
+        draw_sphere(self.target.position, self.target.radius, None, self.target.color);
+    
+        // 3. Side view (bottom-right quadrant)
+        let bot_camera = Camera3D {
+            position: Vec3::new(
+                self.drone.position.x + 200.0,  // Offset to the side
+                self.drone.position.y + 100.0,  // Slightly above
+                self.drone.position.z,
+            ),
+            target: self.target.position,
+            up: Vec3::Y,
+            viewport: Some((main_width, side_height, side_width, side_height)),
+            ..Camera3D::default()
+        };
+        set_camera(&bot_camera);
+        draw_grid(200, 10.0, BLACK, DARKGRAY);
+        draw_cube(self.drone.position, self.drone.size, None, self.drone.color);
+        draw_sphere(self.grenade.position, 3.0, None, self.grenade.color);
+        draw_sphere(self.target.position, self.target.radius, None, self.target.color);
+    
+        // Switch to 2D for UI and borders
         set_default_camera();
         self.render_ui();
+        self.draw_viewport_borders(main_width, side_width, side_height);
+    }
+    
+    fn draw_viewport_borders(&self, main_width: i32, side_width: i32, side_height: i32) {
+        // Draw borders between viewports
+        let screen_height = screen_height() as i32;
+        
+        // Vertical line between main and side views
+        draw_line(
+            main_width as f32, 0.0, 
+            main_width as f32, screen_height as f32, 
+            2.0, BLACK
+        );
+        
+        // Horizontal line between top and bottom side views
+        draw_line(
+            main_width as f32, side_height as f32, 
+            (main_width + side_width) as f32, side_height as f32, 
+            2.0, BLACK
+        );
+        
+        // Add labels for each viewport
+        draw_text("Main View", 10.0, 20.0, 20.0, BLACK);
+        draw_text("Top View", (main_width + 10) as f32, 20.0, 20.0, BLACK);
+        draw_text("Drone View", (main_width + 10) as f32, (side_height + 20) as f32, 20.0, BLACK);
     }
 
     fn render_ui(&self) {
